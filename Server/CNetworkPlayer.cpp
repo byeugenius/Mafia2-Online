@@ -318,7 +318,10 @@ float CNetworkPlayer::GetHealth( void )
 bool CNetworkPlayer::HandleDamageEvent( const PlayerDamageEvent &damageEvent )
 {
 	if( IsDead() )
+	{
+		CLogFile::Printf( "[damage-debug][server-drop] victim=%u reason=dead current=%.2f incomingNew=%.2f", m_playerId, GetHealth(), damageEvent.m_fNewHealth );
 		return false;
+	}
 
 	float fCurrentHealth = GetHealth();
 	float fNewHealth = damageEvent.m_fNewHealth;
@@ -327,7 +330,11 @@ bool CNetworkPlayer::HandleDamageEvent( const PlayerDamageEvent &damageEvent )
 		fNewHealth = 0.0f;
 
 	if( fNewHealth >= fCurrentHealth )
+	{
+		CLogFile::Printf( "[damage-debug][server-drop] victim=%u reason=non_decrease current=%.2f incomingNew=%.2f incomingOld=%.2f",
+			m_playerId, fCurrentHealth, fNewHealth, damageEvent.m_fOldHealth );
 		return false;
+	}
 
 	EntityId attackerId = damageEvent.m_attackerId;
 	if( attackerId == m_playerId )
@@ -349,6 +356,15 @@ bool CNetworkPlayer::HandleDamageEvent( const PlayerDamageEvent &damageEvent )
 		m_dwLastDamageWeapon = 0;
 		m_ulLastDamageTime = 0;
 	}
+
+	CLogFile::Printf( "[damage-debug][server-apply] victim=%u old=%.2f new=%.2f attacker=%u weapon=%u bullet=%d source=%d",
+		m_playerId,
+		fOldHealth,
+		m_fHealth,
+		attackerId,
+		damageEvent.m_dwWeapon,
+		damageEvent.m_iWeaponBullet,
+		(int)damageEvent.m_byteDamageSource );
 
 	CallHealthChangeEvent( m_fHealth, fOldHealth );
 
@@ -633,6 +649,12 @@ void CNetworkPlayer::StoreOnFootSync( const OnFootSync &onFootSync )
 		CCore::Instance()->GetEvents()->Call( "onPlayerChangeWeapon", &pArguments );
 	}
 
+	if( onFootSync.m_fHealth != m_fHealth )
+	{
+		CLogFile::Printf( "[damage-debug][server-ignore-sync-health] type=onfoot player=%u incoming=%.2f authoritative=%.2f",
+			m_playerId, onFootSync.m_fHealth, m_fHealth );
+	}
+
 	m_onFootSync = onFootSync;
 	SyncAuthoritativeHealth();
 
@@ -657,6 +679,12 @@ void CNetworkPlayer::StoreInVehicleSync( const InVehicleSync &inVehicleSync )
 
 void CNetworkPlayer::StorePassengerSync( const InPassengerSync &passengerSync )
 {
+	if( passengerSync.m_fHealth != m_fHealth )
+	{
+		CLogFile::Printf( "[damage-debug][server-ignore-sync-health] type=passenger player=%u incoming=%.2f authoritative=%.2f",
+			m_playerId, passengerSync.m_fHealth, m_fHealth );
+	}
+
 	// Copy the sync data
 	memcpy( &m_passengerSync, &passengerSync, sizeof(InPassengerSync) );
 	SyncAuthoritativeHealth();

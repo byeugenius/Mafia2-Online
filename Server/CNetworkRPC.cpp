@@ -252,6 +252,15 @@ void PlayerDamage( RakNet::BitStream * pBitStream, RakNet::Packet * pPacket )
 	if( !pPlayer )
 		return;
 
+	CLogFile::Printf( "[damage-debug][server-rpc] victim=%u old=%.2f new=%.2f attacker=%u weapon=%u bullet=%d source=%d",
+		playerId,
+		damageEvent.m_fOldHealth,
+		damageEvent.m_fNewHealth,
+		damageEvent.m_attackerId,
+		damageEvent.m_dwWeapon,
+		damageEvent.m_iWeaponBullet,
+		(int)damageEvent.m_byteDamageSource );
+
 	pPlayer->HandleDamageEvent( damageEvent );
 }
 

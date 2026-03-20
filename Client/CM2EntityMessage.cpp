@@ -23,6 +23,7 @@
 #include "CPlayerManager.h"
 
 #include "SharedUtility.h"
+#include "CLogFile.h"
 
 bool CM2EntityMessage::HandleEntityEvent( M2EntityMessage * pMessage )
 {
@@ -116,6 +117,9 @@ bool CM2EntityMessage::HandleEntityEvent( M2EntityMessage * pMessage )
 							byteDamageSource = PLAYER_DAMAGE_SOURCE_FIREARM;
 					}
 				}
+
+				CLogFile::Printf( "[damage-debug][client-context] attacker=%u weapon=%u bullet=%d source=%d enemyGuid=%u senderGuid=%u",
+					attackerId, dwWeapon, iWeaponBullet, (int)byteDamageSource, pMessage->M2DamageMessage__dwEnemyGUID, pMessage->m_dwSenderGUID );
 
 				pLocalPlayer->RegisterDamageContext( attackerId, dwWeapon, iWeaponBullet, byteDamageSource );
 				break;

@@ -136,6 +136,15 @@ void CLocalPlayer::ProcessDamageReporting( void )
 	bitStream.Write( (char *)&damageEvent, sizeof(PlayerDamageEvent) );
 	CCore::Instance()->GetNetworkModule()->Call( RPC_PLAYERDAMAGE, &bitStream, HIGH_PRIORITY, RELIABLE_ORDERED, true );
 
+	CLogFile::Printf( "[damage-debug][client-send] old=%.2f new=%.2f attacker=%u weapon=%u bullet=%d source=%d pendingWindow=%s",
+		damageEvent.m_fOldHealth,
+		damageEvent.m_fNewHealth,
+		damageEvent.m_attackerId,
+		damageEvent.m_dwWeapon,
+		damageEvent.m_iWeaponBullet,
+		(int)damageEvent.m_byteDamageSource,
+		bHasPendingDamageWindow ? "yes" : "no" );
+
 	ResetDamageTracking( fCurrentHealth );
 }
 
@@ -696,8 +705,10 @@ bool CLocalPlayer::OnTakeDamage ( void )
 
 void CLocalPlayer::ApplyServerHealth( float fHealth )
 {
+	float fOldHealth = GetHealth();
 	SetHealth( fHealth );
 	ResetDamageTracking( fHealth );
+	CLogFile::Printf( "[damage-debug][client-correction] old=%.2f new=%.2f", fOldHealth, fHealth );
 }
 
 void CLocalPlayer::RegisterDamageContext( EntityId attackerId, DWORD dwWeapon, int iWeaponBullet, BYTE byteDamageSource )
@@ -707,6 +718,8 @@ void CLocalPlayer::RegisterDamageContext( EntityId attackerId, DWORD dwWeapon, i
 	m_damageContext.m_iWeaponBullet = iWeaponBullet;
 	m_damageContext.m_byteDamageSource = byteDamageSource;
 	m_damageContext.m_ulExpiresAt = (SharedUtility::GetTime() + 500);
+	CLogFile::Printf( "[damage-debug][client-store-context] attacker=%u weapon=%u bullet=%d source=%d expiresInMs=500",
+		attackerId, dwWeapon, iWeaponBullet, (int)byteDamageSource );
 }
 
 void CLocalPlayer::HandleSpawn( bool bRespawn )
