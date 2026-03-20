@@ -165,6 +165,10 @@ CNetworkPlayer::CNetworkPlayer( void )
 	m_bCrouching = false;
 	m_State = PLAYERSTATE_UNKNOWN;
 	m_ulLastPingTime = 0;
+	m_fHealth = 720.0f;
+	m_lastDamageAttackerId = INVALID_ENTITY_ID;
+	m_dwLastDamageWeapon = 0;
+	m_ulLastDamageTime = 0;
 
 	//
 	SetVehicle( NULL );
@@ -262,11 +266,34 @@ unsigned int CNetworkPlayer::GetModel( void )
 	return m_onFootSync.m_uiModelIndex;
 }
 
+void CNetworkPlayer::SyncAuthoritativeHealth( void )
+{
+	m_onFootSync.m_fHealth = m_fHealth;
+	m_passengerSync.m_fHealth = m_fHealth;
+}
+
+void CNetworkPlayer::CallHealthChangeEvent( float fNewHealth, float fOldHealth )
+{
+	if( fNewHealth != fOldHealth )
+	{
+		CSquirrelArguments pArguments;
+		pArguments.push( m_playerId );
+		pArguments.push( fNewHealth );
+		pArguments.push( fOldHealth );
+		CCore::Instance()->GetEvents()->Call( "onPlayerChangeHealth", &pArguments );
+	}
+}
+
 void CNetworkPlayer::SetHealth( float fHealth )
 {
 	// Is this not the same health?
 	if( fHealth != GetHealth() )
 	{
+		float fOldHealth = m_fHealth;
+		m_fHealth = fHealth;
+		SyncAuthoritativeHealth();
+		CallHealthChangeEvent( m_fHealth, fOldHealth );
+
 		// Construct new bitstream
 		RakNet::BitStream pBitStream;
 
@@ -275,12 +302,83 @@ void CNetworkPlayer::SetHealth( float fHealth )
 
 		// Send it to the player
 		CCore::Instance()->GetNetworkModule()->Call( RPC_SETPLAYERHEALTH, &pBitStream, HIGH_PRIORITY, RELIABLE_ORDERED, m_playerId, false );
+
+		if( IsInVehicle() )
+			SendPassengerSync();
+		else
+			SendOnFootSync();
 	}
 }
 
 float CNetworkPlayer::GetHealth( void )
 {
-	return m_onFootSync.m_fHealth;
+	return m_fHealth;
+}
+
+bool CNetworkPlayer::HandleDamageEvent( const PlayerDamageEvent &damageEvent )
+{
+	if( IsDead() )
+		return false;
+
+	float fCurrentHealth = GetHealth();
+	float fNewHealth = damageEvent.m_fNewHealth;
+
+	if( fNewHealth < 0.0f )
+		fNewHealth = 0.0f;
+
+	if( fNewHealth >= fCurrentHealth )
+		return false;
+
+	EntityId attackerId = damageEvent.m_attackerId;
+	if( attackerId == m_playerId )
+		attackerId = INVALID_ENTITY_ID;
+
+	float fOldHealth = m_fHealth;
+	m_fHealth = fNewHealth;
+	SyncAuthoritativeHealth();
+
+	if( attackerId != INVALID_ENTITY_ID )
+	{
+		m_lastDamageAttackerId = attackerId;
+		m_dwLastDamageWeapon = damageEvent.m_dwWeapon;
+		m_ulLastDamageTime = SharedUtility::GetTime();
+	}
+	else
+	{
+		m_lastDamageAttackerId = INVALID_ENTITY_ID;
+		m_dwLastDamageWeapon = 0;
+		m_ulLastDamageTime = 0;
+	}
+
+	CallHealthChangeEvent( m_fHealth, fOldHealth );
+
+	CSquirrelArguments pArguments;
+	pArguments.push( m_playerId );
+	pArguments.push( attackerId );
+	pArguments.push( fOldHealth );
+	pArguments.push( m_fHealth );
+	pArguments.push( (int)damageEvent.m_dwWeapon );
+	pArguments.push( damageEvent.m_iWeaponBullet );
+	pArguments.push( (int)damageEvent.m_byteDamageSource );
+	CCore::Instance()->GetEvents()->Call( "onPlayerDamage", &pArguments );
+
+	if( IsInVehicle() )
+		SendPassengerSync();
+	else
+		SendOnFootSync();
+
+	return true;
+}
+
+EntityId CNetworkPlayer::GetLastDamageAttacker( void )
+{
+	if( m_lastDamageAttackerId == INVALID_ENTITY_ID )
+		return INVALID_ENTITY_ID;
+
+	if( (SharedUtility::GetTime() - m_ulLastDamageTime) > 5000 )
+		return INVALID_ENTITY_ID;
+
+	return m_lastDamageAttackerId;
 }
 
 void CNetworkPlayer::GiveWeapon( int iWeapon, int iAmmo )
@@ -454,6 +552,11 @@ void CNetworkPlayer::KillForWorld( void )
 {
 	// Mark as dead
 	SetDead( true );
+	m_fHealth = 0.0f;
+	SyncAuthoritativeHealth();
+	m_lastDamageAttackerId = INVALID_ENTITY_ID;
+	m_dwLastDamageWeapon = 0;
+	m_ulLastDamageTime = 0;
 
 	// Loop all the players
 	for (EntityId i = 0; i < MAX_PLAYERS; i++)
@@ -483,6 +586,11 @@ void CNetworkPlayer::SpawnForWorld( void )
 {
 	// Mark as not dead
 	SetDead( false );
+	m_fHealth = 720.0f;
+	SyncAuthoritativeHealth();
+	m_lastDamageAttackerId = INVALID_ENTITY_ID;
+	m_dwLastDamageWeapon = 0;
+	m_ulLastDamageTime = 0;
 
 	// Is the player in a vehicle?
 	if( IsInVehicle() )
@@ -525,18 +633,8 @@ void CNetworkPlayer::StoreOnFootSync( const OnFootSync &onFootSync )
 		CCore::Instance()->GetEvents()->Call( "onPlayerChangeWeapon", &pArguments );
 	}
 
-	// Has the player changed health?
-	if( onFootSync.m_fHealth != m_onFootSync.m_fHealth )
-	{
-		// Call the event
-		CSquirrelArguments pArguments;
-		pArguments.push( m_playerId );
-		pArguments.push( onFootSync.m_fHealth );
-		pArguments.push( m_onFootSync.m_fHealth );
-		CCore::Instance()->GetEvents()->Call( "onPlayerChangeHealth", &pArguments );
-	}
-
 	m_onFootSync = onFootSync;
+	SyncAuthoritativeHealth();
 
 	// Send the on foot sync
 	SendOnFootSync();
@@ -559,22 +657,9 @@ void CNetworkPlayer::StoreInVehicleSync( const InVehicleSync &inVehicleSync )
 
 void CNetworkPlayer::StorePassengerSync( const InPassengerSync &passengerSync )
 {
-	// Has the player changed health?
-	if( m_onFootSync.m_fHealth != passengerSync.m_fHealth )
-	{
-		// Call the event
-		CSquirrelArguments pArguments;
-		pArguments.push( m_playerId );
-		pArguments.push( passengerSync.m_fHealth );
-		pArguments.push( m_onFootSync.m_fHealth );
-		CCore::Instance()->GetEvents()->Call( "onPlayerChangeHealth", &pArguments );
-
-		// Store the new health
-		m_onFootSync.m_fHealth = passengerSync.m_fHealth;
-	}
-
 	// Copy the sync data
 	memcpy( &m_passengerSync, &passengerSync, sizeof(InPassengerSync) );
+	SyncAuthoritativeHealth();
 
 	// Send the passenger sync
 	SendPassengerSync();

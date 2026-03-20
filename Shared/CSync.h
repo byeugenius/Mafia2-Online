@@ -10,6 +10,7 @@
 #pragma once
 
 // NOTE(zaklaus): Even though it sounds forced, Linux.h contains condition for non-win32 system.
+#include "CCommon.h"
 #include "Linux.h"
 
 #include "CColor.h"
@@ -113,6 +114,33 @@ struct InPassengerSync
 	float			m_fHealth;
 	DWORD			m_dwSelectedWeapon;
 	int				m_iSelectedWeaponBullet;
+};
+
+enum ePlayerDamageSource
+{
+	PLAYER_DAMAGE_SOURCE_UNKNOWN = 0,
+	PLAYER_DAMAGE_SOURCE_FIREARM,
+	PLAYER_DAMAGE_SOURCE_GENERIC
+};
+
+struct PlayerDamageEvent
+{
+	float			m_fOldHealth;
+	float			m_fNewHealth;
+	EntityId		m_attackerId;
+	DWORD			m_dwWeapon;
+	int				m_iWeaponBullet;
+	BYTE			m_byteDamageSource;
+
+	PlayerDamageEvent()
+		: m_fOldHealth(720.0f)
+		, m_fNewHealth(720.0f)
+		, m_attackerId(INVALID_ENTITY_ID)
+		, m_dwWeapon(0)
+		, m_iWeaponBullet(0)
+		, m_byteDamageSource(PLAYER_DAMAGE_SOURCE_UNKNOWN)
+	{
+	}
 };
 
 struct UnoccupiedVehicleSync

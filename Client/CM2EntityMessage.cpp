@@ -89,6 +89,38 @@ bool CM2EntityMessage::HandleEntityEvent( M2EntityMessage * pMessage )
 				break;
 			}
 
+		case M2Enums::ON_DAMAGE:
+			{
+				EntityId attackerId = INVALID_ENTITY_ID;
+
+				if( pMessage->M2DamageMessage__dwEnemyGUID != 0 )
+					attackerId = CCore::Instance()->GetPlayerManager()->GetIdFromGameGUID( pMessage->M2DamageMessage__dwEnemyGUID );
+
+				if( attackerId == INVALID_ENTITY_ID && pMessage->m_dwSenderGUID != 0 )
+					attackerId = CCore::Instance()->GetPlayerManager()->GetIdFromGameGUID( pMessage->m_dwSenderGUID );
+
+				DWORD dwWeapon = 0;
+				int iWeaponBullet = 0;
+				BYTE byteDamageSource = PLAYER_DAMAGE_SOURCE_GENERIC;
+
+				if( attackerId != INVALID_ENTITY_ID )
+				{
+					CNetworkPlayer * pAttacker = CCore::Instance()->GetPlayerManager()->Get( attackerId );
+
+					if( pAttacker )
+					{
+						dwWeapon = pAttacker->GetSelectedWeapon();
+						iWeaponBullet = pAttacker->GetSelectedWeaponBullet();
+
+						if( dwWeapon > 1 )
+							byteDamageSource = PLAYER_DAMAGE_SOURCE_FIREARM;
+					}
+				}
+
+				pLocalPlayer->RegisterDamageContext( attackerId, dwWeapon, iWeaponBullet, byteDamageSource );
+				break;
+			}
+
 		case M2Enums::ON_DEATH:
 			{
 				CNetworkPlayer * pKiller = CCore::Instance()->GetPlayerManager()->GetFromGameGUID( pMessage->M2HumanDeathMessage__dwKillerGUID );

@@ -99,7 +99,7 @@ void SetPlayerHealth( RakNet::BitStream * pBitStream, RakNet::Packet * pPacket )
 	if( pCore->GetPlayerManager()->GetLocalPlayer() )
 	{
 		// Set the player health
-		pCore->GetPlayerManager()->GetLocalPlayer()->SetHealth( fHealth );
+		pCore->GetPlayerManager()->GetLocalPlayer()->ApplyServerHealth( fHealth );
 	}
 }
 

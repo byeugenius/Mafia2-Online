@@ -34,6 +34,10 @@ private:
 	OnFootSync													m_onFootSync;
 	InVehicleSync												m_inVehicleSync;
 	InPassengerSync												m_passengerSync;
+	float														m_fHealth;
+	EntityId													m_lastDamageAttackerId;
+	DWORD														m_dwLastDamageWeapon;
+	unsigned long												m_ulLastDamageTime;
 
 	bool														m_bAiming;
 	bool														m_bCrouching;
@@ -44,6 +48,9 @@ private:
 
 	std::list< CNetworkVehicle* >								m_syncingVehicles;
 	unsigned long												m_ulLastPingTime;
+
+	void							SyncAuthoritativeHealth		( void );
+	void							CallHealthChangeEvent		( float fNewHealth, float fOldHealth );
 
 public:
 
@@ -80,6 +87,8 @@ public:
 
 	void							SetHealth					( float fHealth );
 	float							GetHealth					( void );
+	bool							HandleDamageEvent			( const PlayerDamageEvent &damageEvent );
+	EntityId						GetLastDamageAttacker		( void );
 
 	void							GiveWeapon					( int iWeapon, int iAmmo );
 	void							RemoveWeapon				( int iWeapon, int iAmmo );
