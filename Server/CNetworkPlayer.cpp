@@ -11,6 +11,35 @@
 
 #include "CCore.h"
 
+static float GetClampedHealthValue( float fHealth )
+{
+	if( fHealth < 0.0f )
+		return 0.0f;
+
+	if( fHealth > PLAYER_DEFAULT_HEALTH )
+		return PLAYER_DEFAULT_HEALTH;
+
+	return fHealth;
+}
+
+static float GetDotProduct( const CVector3 &vecLeft, const CVector3 &vecRight )
+{
+	return ((vecLeft.fX * vecRight.fX) + (vecLeft.fY * vecRight.fY) + (vecLeft.fZ * vecRight.fZ));
+}
+
+static bool NormalizeVectorSafe( CVector3 * pVector )
+{
+	if( !pVector )
+		return false;
+
+	float fLength = pVector->Length();
+	if( fLength <= 0.0001f )
+		return false;
+
+	*pVector /= fLength;
+	return true;
+}
+
 // temp lol
 unsigned int playerColors[] =
 {
@@ -165,6 +194,10 @@ CNetworkPlayer::CNetworkPlayer( void )
 	m_bCrouching = false;
 	m_State = PLAYERSTATE_UNKNOWN;
 	m_ulLastPingTime = 0;
+	m_fHealth = PLAYER_DEFAULT_HEALTH;
+	m_lastDamageAttackerId = INVALID_ENTITY_ID;
+	m_dwLastDamageWeapon = 0;
+	m_ulLastDamageTime = 0;
 
 	//
 	SetVehicle( NULL );
@@ -262,25 +295,346 @@ unsigned int CNetworkPlayer::GetModel( void )
 	return m_onFootSync.m_uiModelIndex;
 }
 
+void CNetworkPlayer::SyncAuthoritativeHealth( void )
+{
+	m_onFootSync.m_fHealth = m_fHealth;
+	m_passengerSync.m_fHealth = m_fHealth;
+}
+
+void CNetworkPlayer::CallHealthChangeEvent( float fNewHealth, float fOldHealth )
+{
+	if( fNewHealth != fOldHealth )
+	{
+		CSquirrelArguments pArguments;
+		pArguments.push( m_playerId );
+		pArguments.push( fNewHealth );
+		pArguments.push( fOldHealth );
+		CCore::Instance()->GetEvents()->Call( "onPlayerChangeHealth", &pArguments );
+	}
+}
+
+void CNetworkPlayer::PrunePendingShotHits( unsigned long ulCurrentTime )
+{
+	for( std::list< sPendingShotHit >::iterator iter = m_pendingShotHits.begin(); iter != m_pendingShotHits.end(); )
+	{
+		if( (ulCurrentTime - iter->m_ulReceivedAt) > PLAYER_DAMAGE_PENDING_WINDOW_MS )
+			iter = m_pendingShotHits.erase( iter );
+		else
+			++iter;
+	}
+}
+
+void CNetworkPlayer::ClearPendingShotHits( void )
+{
+	m_pendingShotHits.clear();
+}
+
+void CNetworkPlayer::QueuePendingShotHit( const sPendingShotHit &pendingShotHit )
+{
+	unsigned long ulCurrentTime = SharedUtility::GetTime();
+	PrunePendingShotHits( ulCurrentTime );
+	m_pendingShotHits.push_back( pendingShotHit );
+}
+
+bool CNetworkPlayer::ConsumePendingShotHit( EntityId preferredAttackerId, sPendingShotHit * pPendingShotHit )
+{
+	unsigned long ulCurrentTime = SharedUtility::GetTime();
+	PrunePendingShotHits( ulCurrentTime );
+
+	for( std::list< sPendingShotHit >::iterator iter = m_pendingShotHits.begin(); iter != m_pendingShotHits.end(); ++iter )
+	{
+		if( preferredAttackerId != INVALID_ENTITY_ID && iter->m_shooterId != preferredAttackerId )
+			continue;
+
+		if( pPendingShotHit )
+			*pPendingShotHit = *iter;
+
+		m_pendingShotHits.erase( iter );
+		return true;
+	}
+
+	return false;
+}
+
+bool CNetworkPlayer::ApplyFallbackSyncDamage( float fIncomingHealth, BYTE byteDamageSource )
+{
+	if( IsDead() )
+		return false;
+
+	fIncomingHealth = GetClampedHealthValue( fIncomingHealth );
+
+	if( fIncomingHealth >= m_fHealth )
+		return false;
+
+	float fOldHealth = m_fHealth;
+	m_fHealth = fIncomingHealth;
+	SyncAuthoritativeHealth();
+
+	EntityId attackerId = INVALID_ENTITY_ID;
+	DWORD dwWeapon = 0;
+	int iWeaponBullet = 0;
+	sPendingShotHit pendingShotHit;
+	if( ConsumePendingShotHit( INVALID_ENTITY_ID, &pendingShotHit ) )
+	{
+		attackerId = pendingShotHit.m_shooterId;
+		dwWeapon = pendingShotHit.m_dwWeapon;
+		iWeaponBullet = pendingShotHit.m_iWeaponBullet;
+		byteDamageSource = PLAYER_DAMAGE_SOURCE_FIREARM;
+	}
+
+	if( attackerId != INVALID_ENTITY_ID )
+	{
+		m_lastDamageAttackerId = attackerId;
+		m_dwLastDamageWeapon = dwWeapon;
+		m_ulLastDamageTime = SharedUtility::GetTime();
+	}
+	else
+	{
+		m_lastDamageAttackerId = INVALID_ENTITY_ID;
+		m_dwLastDamageWeapon = 0;
+		m_ulLastDamageTime = 0;
+	}
+
+	CLogFile::Printf( "[damage-debug][server-fallback-sync-damage] victim=%u old=%.2f new=%.2f attacker=%u weapon=%u bullet=%d source=%d",
+		m_playerId, fOldHealth, m_fHealth, attackerId, dwWeapon, iWeaponBullet, (int)byteDamageSource );
+
+	CallHealthChangeEvent( m_fHealth, fOldHealth );
+
+	CSquirrelArguments pArguments;
+	pArguments.push( m_playerId );
+	pArguments.push( attackerId );
+	pArguments.push( fOldHealth );
+	pArguments.push( m_fHealth );
+	pArguments.push( (int)dwWeapon );
+	pArguments.push( iWeaponBullet );
+	pArguments.push( (int)byteDamageSource );
+	CCore::Instance()->GetEvents()->Call( "onPlayerDamage", &pArguments );
+	return true;
+}
+
 void CNetworkPlayer::SetHealth( float fHealth )
 {
+	fHealth = GetClampedHealthValue( fHealth );
+
 	// Is this not the same health?
 	if( fHealth != GetHealth() )
 	{
+		float fOldHealth = m_fHealth;
+		m_fHealth = fHealth;
+		SyncAuthoritativeHealth();
+		CallHealthChangeEvent( m_fHealth, fOldHealth );
+
 		// Construct new bitstream
 		RakNet::BitStream pBitStream;
 
 		// Write the health
-		pBitStream.Write( fHealth );
+		pBitStream.Write( m_fHealth );
 
 		// Send it to the player
 		CCore::Instance()->GetNetworkModule()->Call( RPC_SETPLAYERHEALTH, &pBitStream, HIGH_PRIORITY, RELIABLE_ORDERED, m_playerId, false );
+
+		if( IsInVehicle() )
+			SendPassengerSync();
+		else
+			SendOnFootSync();
 	}
 }
 
 float CNetworkPlayer::GetHealth( void )
 {
-	return m_onFootSync.m_fHealth;
+	return m_fHealth;
+}
+
+bool CNetworkPlayer::HandleShotHitEvent( const PlayerHitEvent &hitEvent )
+{
+	if( IsDead() )
+	{
+		CLogFile::Printf( "[damage-debug][server-shot-reject] shooter=%u target=%u reason=shooter_dead",
+			m_playerId, hitEvent.m_targetId );
+		return false;
+	}
+
+	if( hitEvent.m_targetId == INVALID_ENTITY_ID || hitEvent.m_targetId == m_playerId )
+	{
+		CLogFile::Printf( "[damage-debug][server-shot-reject] shooter=%u target=%u reason=invalid_target",
+			m_playerId, hitEvent.m_targetId );
+		return false;
+	}
+
+	if( !CCore::Instance()->GetPlayerManager()->IsActive( hitEvent.m_targetId ) )
+	{
+		CLogFile::Printf( "[damage-debug][server-shot-reject] shooter=%u target=%u reason=target_inactive",
+			m_playerId, hitEvent.m_targetId );
+		return false;
+	}
+
+	CNetworkPlayer * pTarget = CCore::Instance()->GetPlayerManager()->Get( hitEvent.m_targetId );
+	if( !pTarget || pTarget->IsDead() )
+	{
+		CLogFile::Printf( "[damage-debug][server-shot-reject] shooter=%u target=%u reason=target_dead",
+			m_playerId, hitEvent.m_targetId );
+		return false;
+	}
+
+	int iCurrentWeapon = GetWeapon();
+	if( hitEvent.m_dwWeapon <= 1 )
+	{
+		CLogFile::Printf( "[damage-debug][server-shot-reject] shooter=%u target=%u reason=invalid_weapon current=%d incoming=%u",
+			m_playerId, hitEvent.m_targetId, iCurrentWeapon, hitEvent.m_dwWeapon );
+		return false;
+	}
+
+	if( iCurrentWeapon > 1 && (DWORD)iCurrentWeapon != hitEvent.m_dwWeapon )
+	{
+		CLogFile::Printf( "[damage-debug][server-shot-weapon-mismatch] shooter=%u target=%u current=%d incoming=%u",
+			m_playerId, hitEvent.m_targetId, iCurrentWeapon, hitEvent.m_dwWeapon );
+	}
+
+	CVector3 vecShooterPosition;
+	CVector3 vecTargetPosition;
+	GetPosition( &vecShooterPosition );
+	pTarget->GetPosition( &vecTargetPosition );
+
+	float fDistance = (vecTargetPosition - vecShooterPosition).Length();
+	if( fDistance > 500.0f )
+	{
+		CLogFile::Printf( "[damage-debug][server-shot-reject] shooter=%u target=%u reason=distance distance=%.2f",
+			m_playerId, hitEvent.m_targetId, fDistance );
+		return false;
+	}
+
+	float fShooterPositionDelta = (vecShooterPosition - hitEvent.m_vecShooterPosition).Length();
+	if( fShooterPositionDelta > 15.0f )
+	{
+		CLogFile::Printf( "[damage-debug][server-shot-reject] shooter=%u target=%u reason=position_delta delta=%.2f",
+			m_playerId, hitEvent.m_targetId, fShooterPositionDelta );
+		return false;
+	}
+
+	CVector3 vecShotDirection = (hitEvent.m_vecLookAt - hitEvent.m_vecShooterPosition);
+	CVector3 vecTargetDirection = (vecTargetPosition - hitEvent.m_vecShooterPosition);
+	if( NormalizeVectorSafe( &vecShotDirection ) && NormalizeVectorSafe( &vecTargetDirection ) )
+	{
+		float fDot = GetDotProduct( vecShotDirection, vecTargetDirection );
+		if( fDot < 0.15f )
+		{
+			CLogFile::Printf( "[damage-debug][server-shot-reject] shooter=%u target=%u reason=angle dot=%.3f",
+				m_playerId, hitEvent.m_targetId, fDot );
+			return false;
+		}
+	}
+
+	sPendingShotHit pendingShotHit;
+	pendingShotHit.m_shooterId = m_playerId;
+	pendingShotHit.m_dwWeapon = hitEvent.m_dwWeapon;
+	pendingShotHit.m_iWeaponBullet = hitEvent.m_iWeaponBullet;
+	pendingShotHit.m_vecShooterPosition = hitEvent.m_vecShooterPosition;
+	pendingShotHit.m_vecLookAt = hitEvent.m_vecLookAt;
+	pendingShotHit.m_ulReceivedAt = SharedUtility::GetTime();
+
+	pTarget->QueuePendingShotHit( pendingShotHit );
+
+	CLogFile::Printf( "[damage-debug][server-shot-accept] shooter=%u target=%u weapon=%u bullet=%d distance=%.2f",
+		m_playerId, hitEvent.m_targetId, hitEvent.m_dwWeapon, hitEvent.m_iWeaponBullet, fDistance );
+	return true;
+}
+
+bool CNetworkPlayer::HandleDamageEvent( const PlayerDamageEvent &damageEvent )
+{
+	if( IsDead() )
+	{
+		CLogFile::Printf( "[damage-debug][server-drop] victim=%u reason=dead current=%.2f incomingNew=%.2f", m_playerId, GetHealth(), damageEvent.m_fNewHealth );
+		return false;
+	}
+
+	float fCurrentHealth = GetHealth();
+	float fNewHealth = GetClampedHealthValue( damageEvent.m_fNewHealth );
+
+	if( fNewHealth >= fCurrentHealth )
+	{
+		CLogFile::Printf( "[damage-debug][server-drop] victim=%u reason=non_decrease current=%.2f incomingNew=%.2f incomingOld=%.2f",
+			m_playerId, fCurrentHealth, fNewHealth, damageEvent.m_fOldHealth );
+		return false;
+	}
+
+	EntityId attackerId = damageEvent.m_attackerId;
+	if( attackerId == m_playerId )
+		attackerId = INVALID_ENTITY_ID;
+
+	DWORD dwWeapon = damageEvent.m_dwWeapon;
+	int iWeaponBullet = damageEvent.m_iWeaponBullet;
+	BYTE byteDamageSource = damageEvent.m_byteDamageSource;
+	sPendingShotHit pendingShotHit;
+	bool bMatchedShotHit = ConsumePendingShotHit( attackerId, &pendingShotHit );
+
+	if( bMatchedShotHit )
+	{
+		attackerId = pendingShotHit.m_shooterId;
+		dwWeapon = pendingShotHit.m_dwWeapon;
+		iWeaponBullet = pendingShotHit.m_iWeaponBullet;
+		byteDamageSource = PLAYER_DAMAGE_SOURCE_FIREARM;
+	}
+	else if( byteDamageSource == PLAYER_DAMAGE_SOURCE_FIREARM )
+	{
+		CLogFile::Printf( "[damage-debug][server-unpaired-firearm] victim=%u attacker=%u reportedWeapon=%u reportedBullet=%d",
+			m_playerId, attackerId, damageEvent.m_dwWeapon, damageEvent.m_iWeaponBullet );
+	}
+
+	float fOldHealth = m_fHealth;
+	m_fHealth = fNewHealth;
+	SyncAuthoritativeHealth();
+
+	if( attackerId != INVALID_ENTITY_ID )
+	{
+		m_lastDamageAttackerId = attackerId;
+		m_dwLastDamageWeapon = dwWeapon;
+		m_ulLastDamageTime = SharedUtility::GetTime();
+	}
+	else
+	{
+		m_lastDamageAttackerId = INVALID_ENTITY_ID;
+		m_dwLastDamageWeapon = 0;
+		m_ulLastDamageTime = 0;
+	}
+
+	CLogFile::Printf( "[damage-debug][server-apply] victim=%u old=%.2f new=%.2f attacker=%u weapon=%u bullet=%d source=%d",
+		m_playerId,
+		fOldHealth,
+		m_fHealth,
+		attackerId,
+		dwWeapon,
+		iWeaponBullet,
+		(int)byteDamageSource );
+
+	CallHealthChangeEvent( m_fHealth, fOldHealth );
+
+	CSquirrelArguments pArguments;
+	pArguments.push( m_playerId );
+	pArguments.push( attackerId );
+	pArguments.push( fOldHealth );
+	pArguments.push( m_fHealth );
+	pArguments.push( (int)dwWeapon );
+	pArguments.push( iWeaponBullet );
+	pArguments.push( (int)byteDamageSource );
+	CCore::Instance()->GetEvents()->Call( "onPlayerDamage", &pArguments );
+
+	if( IsInVehicle() )
+		SendPassengerSync();
+	else
+		SendOnFootSync();
+
+	return true;
+}
+
+EntityId CNetworkPlayer::GetLastDamageAttacker( void )
+{
+	if( m_lastDamageAttackerId == INVALID_ENTITY_ID )
+		return INVALID_ENTITY_ID;
+
+	if( (SharedUtility::GetTime() - m_ulLastDamageTime) > 5000 )
+		return INVALID_ENTITY_ID;
+
+	return m_lastDamageAttackerId;
 }
 
 void CNetworkPlayer::GiveWeapon( int iWeapon, int iAmmo )
@@ -315,11 +669,17 @@ void CNetworkPlayer::RemoveWeapon( int iWeapon, int iAmmo )
 
 int CNetworkPlayer::GetWeapon( void )
 {
+	if( IsInVehicle() && m_iSeat != 0 )
+		return (int)m_passengerSync.m_dwSelectedWeapon;
+
 	return (int)m_onFootSync.m_dwSelectedWeapon;
 }
 
 int CNetworkPlayer::GetWeaponBullet(void)
 {
+	if( IsInVehicle() && m_iSeat != 0 )
+		return m_passengerSync.m_iSelectedWeaponBullet;
+
 	return m_onFootSync.m_iSelectedWeaponBullet;
 }
 
@@ -454,6 +814,12 @@ void CNetworkPlayer::KillForWorld( void )
 {
 	// Mark as dead
 	SetDead( true );
+	m_fHealth = 0.0f;
+	SyncAuthoritativeHealth();
+	m_lastDamageAttackerId = INVALID_ENTITY_ID;
+	m_dwLastDamageWeapon = 0;
+	m_ulLastDamageTime = 0;
+	ClearPendingShotHits();
 
 	// Loop all the players
 	for (EntityId i = 0; i < MAX_PLAYERS; i++)
@@ -483,6 +849,12 @@ void CNetworkPlayer::SpawnForWorld( void )
 {
 	// Mark as not dead
 	SetDead( false );
+	m_fHealth = PLAYER_DEFAULT_HEALTH;
+	SyncAuthoritativeHealth();
+	m_lastDamageAttackerId = INVALID_ENTITY_ID;
+	m_dwLastDamageWeapon = 0;
+	m_ulLastDamageTime = 0;
+	ClearPendingShotHits();
 
 	// Is the player in a vehicle?
 	if( IsInVehicle() )
@@ -525,18 +897,16 @@ void CNetworkPlayer::StoreOnFootSync( const OnFootSync &onFootSync )
 		CCore::Instance()->GetEvents()->Call( "onPlayerChangeWeapon", &pArguments );
 	}
 
-	// Has the player changed health?
-	if( onFootSync.m_fHealth != m_onFootSync.m_fHealth )
+	if( onFootSync.m_fHealth != m_fHealth )
 	{
-		// Call the event
-		CSquirrelArguments pArguments;
-		pArguments.push( m_playerId );
-		pArguments.push( onFootSync.m_fHealth );
-		pArguments.push( m_onFootSync.m_fHealth );
-		CCore::Instance()->GetEvents()->Call( "onPlayerChangeHealth", &pArguments );
+		CLogFile::Printf( "[damage-debug][server-ignore-sync-health] type=onfoot player=%u incoming=%.2f authoritative=%.2f",
+			m_playerId, onFootSync.m_fHealth, m_fHealth );
+
+		ApplyFallbackSyncDamage( onFootSync.m_fHealth, PLAYER_DAMAGE_SOURCE_GENERIC );
 	}
 
 	m_onFootSync = onFootSync;
+	SyncAuthoritativeHealth();
 
 	// Send the on foot sync
 	SendOnFootSync();
@@ -559,22 +929,17 @@ void CNetworkPlayer::StoreInVehicleSync( const InVehicleSync &inVehicleSync )
 
 void CNetworkPlayer::StorePassengerSync( const InPassengerSync &passengerSync )
 {
-	// Has the player changed health?
-	if( m_onFootSync.m_fHealth != passengerSync.m_fHealth )
+	if( passengerSync.m_fHealth != m_fHealth )
 	{
-		// Call the event
-		CSquirrelArguments pArguments;
-		pArguments.push( m_playerId );
-		pArguments.push( passengerSync.m_fHealth );
-		pArguments.push( m_onFootSync.m_fHealth );
-		CCore::Instance()->GetEvents()->Call( "onPlayerChangeHealth", &pArguments );
+		CLogFile::Printf( "[damage-debug][server-ignore-sync-health] type=passenger player=%u incoming=%.2f authoritative=%.2f",
+			m_playerId, passengerSync.m_fHealth, m_fHealth );
 
-		// Store the new health
-		m_onFootSync.m_fHealth = passengerSync.m_fHealth;
+		ApplyFallbackSyncDamage( passengerSync.m_fHealth, PLAYER_DAMAGE_SOURCE_VEHICLE_IMPACT );
 	}
 
 	// Copy the sync data
 	memcpy( &m_passengerSync, &passengerSync, sizeof(InPassengerSync) );
+	SyncAuthoritativeHealth();
 
 	// Send the passenger sync
 	SendPassengerSync();

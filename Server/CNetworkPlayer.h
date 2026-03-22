@@ -34,6 +34,30 @@ private:
 	OnFootSync													m_onFootSync;
 	InVehicleSync												m_inVehicleSync;
 	InPassengerSync												m_passengerSync;
+	float														m_fHealth;
+	EntityId													m_lastDamageAttackerId;
+	DWORD														m_dwLastDamageWeapon;
+	unsigned long												m_ulLastDamageTime;
+	struct sPendingShotHit
+	{
+		EntityId												m_shooterId;
+		DWORD													m_dwWeapon;
+		int														m_iWeaponBullet;
+		CVector3												m_vecShooterPosition;
+		CVector3												m_vecLookAt;
+		unsigned long											m_ulReceivedAt;
+
+		sPendingShotHit()
+			: m_shooterId( INVALID_ENTITY_ID )
+			, m_dwWeapon( 0 )
+			, m_iWeaponBullet( 0 )
+			, m_vecShooterPosition()
+			, m_vecLookAt()
+			, m_ulReceivedAt( 0 )
+		{
+		}
+	};
+	std::list< sPendingShotHit >								m_pendingShotHits;
 
 	bool														m_bAiming;
 	bool														m_bCrouching;
@@ -44,6 +68,14 @@ private:
 
 	std::list< CNetworkVehicle* >								m_syncingVehicles;
 	unsigned long												m_ulLastPingTime;
+
+	void							SyncAuthoritativeHealth		( void );
+	void							CallHealthChangeEvent		( float fNewHealth, float fOldHealth );
+	void							PrunePendingShotHits		( unsigned long ulCurrentTime );
+	void							ClearPendingShotHits		( void );
+	void							QueuePendingShotHit			( const sPendingShotHit &pendingShotHit );
+	bool							ConsumePendingShotHit		( EntityId preferredAttackerId, sPendingShotHit * pPendingShotHit );
+	bool							ApplyFallbackSyncDamage		( float fIncomingHealth, BYTE byteDamageSource );
 
 public:
 
@@ -80,6 +112,9 @@ public:
 
 	void							SetHealth					( float fHealth );
 	float							GetHealth					( void );
+	bool							HandleShotHitEvent			( const PlayerHitEvent &hitEvent );
+	bool							HandleDamageEvent			( const PlayerDamageEvent &damageEvent );
+	EntityId						GetLastDamageAttacker		( void );
 
 	void							GiveWeapon					( int iWeapon, int iAmmo );
 	void							RemoveWeapon				( int iWeapon, int iAmmo );

@@ -139,6 +139,16 @@ void CNetworkModule::UpdateNetwork( void )
 				}
 				break;
 			}
+
+		case ID_RPC_REMOTE_ERROR:
+			{
+				const char * szFunctionName = (pPacket->length > 2 ? (const char *)&pPacket->data[2] : "unknown");
+				CLogFile::Printf( "[network][rpc-remote-error] player=%u code=%u function=%s",
+					(EntityId)pPacket->systemAddress.systemIndex,
+					(pPacket->length > 1 ? (unsigned int)pPacket->data[1] : 0),
+					szFunctionName );
+				break;
+			}
 		}
 
 		// Deallocate the memory used by the packet

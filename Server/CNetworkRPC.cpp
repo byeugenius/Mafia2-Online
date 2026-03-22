@@ -241,6 +241,53 @@ void PlayerSync( RakNet::BitStream * pBitStream, RakNet::Packet * pPacket )
 	}
 }
 
+void PlayerDamage( RakNet::BitStream * pBitStream, RakNet::Packet * pPacket )
+{
+	EntityId playerId = (EntityId)pPacket->guid.systemIndex;
+
+	PlayerDamageEvent damageEvent;
+	if( !DeserializePlayerDamageEvent( pBitStream, &damageEvent ) )
+	{
+		CLogFile::Printf( "[damage-debug][server-rpc-drop] victim=%u rpc=%s reason=deserialize_failed unreadBits=%u",
+			playerId, RPC_PLAYERDAMAGE, pBitStream->GetNumberOfUnreadBits() );
+		return;
+	}
+
+	CNetworkPlayer * pPlayer = CCore::Instance()->GetPlayerManager()->Get( playerId );
+	if( !pPlayer )
+		return;
+
+	CLogFile::Printf( "[damage-debug][server-rpc] victim=%u old=%.2f new=%.2f attacker=%u weapon=%u bullet=%d source=%d",
+		playerId,
+		damageEvent.m_fOldHealth,
+		damageEvent.m_fNewHealth,
+		damageEvent.m_attackerId,
+		damageEvent.m_dwWeapon,
+		damageEvent.m_iWeaponBullet,
+		(int)damageEvent.m_byteDamageSource );
+
+	pPlayer->HandleDamageEvent( damageEvent );
+}
+
+void PlayerShotHit( RakNet::BitStream * pBitStream, RakNet::Packet * pPacket )
+{
+	EntityId playerId = (EntityId)pPacket->guid.systemIndex;
+
+	PlayerHitEvent hitEvent;
+	if( !DeserializePlayerHitEvent( pBitStream, &hitEvent ) )
+	{
+		CLogFile::Printf( "[damage-debug][server-rpc-drop] shooter=%u rpc=%s reason=deserialize_failed unreadBits=%u",
+			playerId, RPC_PLAYERSHOTHIT, pBitStream->GetNumberOfUnreadBits() );
+		return;
+	}
+
+	CNetworkPlayer * pPlayer = CCore::Instance()->GetPlayerManager()->Get( playerId );
+	if( !pPlayer )
+		return;
+
+	pPlayer->HandleShotHitEvent( hitEvent );
+}
+
 void PlayerDeath( RakNet::BitStream * pBitStream, RakNet::Packet * pPacket )
 {
 	// Get the player id
@@ -256,6 +303,9 @@ void PlayerDeath( RakNet::BitStream * pBitStream, RakNet::Packet * pPacket )
 	// Is the player pointer valid?
 	if( pPlayer )
 	{
+		if( killerId == INVALID_ENTITY_ID )
+			killerId = pPlayer->GetLastDamageAttacker();
+
 		// Kill the player
 		pPlayer->KillForWorld();
 
@@ -543,6 +593,8 @@ void CNetworkRPC::Register( RakNet::RPC4 * pRPC )
 	// Player rpcs
 	pRPC->RegisterFunction( RPC_PLAYER_CHAT, PlayerChat );
 	pRPC->RegisterFunction( RPC_PLAYER_SYNC, PlayerSync );
+	pRPC->RegisterFunction( RPC_PLAYERDAMAGE, PlayerDamage );
+	pRPC->RegisterFunction( RPC_PLAYERSHOTHIT, PlayerShotHit );
 	pRPC->RegisterFunction( RPC_PLAYER_DEATH, PlayerDeath );
 	pRPC->RegisterFunction( RPC_PLAYER_SPAWN, PlayerSpawn );
 	pRPC->RegisterFunction( RPC_PLAYER_RESPAWN, PlayerRespawn );
@@ -560,6 +612,8 @@ void CNetworkRPC::Register( RakNet::RPC4 * pRPC )
 
 	// Events
 	pRPC->RegisterFunction( RPC_TRIGGEREVENT, TriggerEvent );
+
+	m_bRegistered = true;
 }
 
 void CNetworkRPC::Unregister( RakNet::RPC4 * pRPC )
@@ -574,6 +628,8 @@ void CNetworkRPC::Unregister( RakNet::RPC4 * pRPC )
 	// Player rpcs
 	pRPC->UnregisterFunction( RPC_PLAYER_CHAT );
 	pRPC->UnregisterFunction( RPC_PLAYER_SYNC );
+	pRPC->UnregisterFunction( RPC_PLAYERDAMAGE );
+	pRPC->UnregisterFunction( RPC_PLAYERSHOTHIT );
 	pRPC->UnregisterFunction( RPC_PLAYER_DEATH );
 	pRPC->UnregisterFunction( RPC_PLAYER_SPAWN );
 	pRPC->UnregisterFunction( RPC_PLAYER_RESPAWN );
@@ -591,4 +647,6 @@ void CNetworkRPC::Unregister( RakNet::RPC4 * pRPC )
 
 	// Events
 	pRPC->UnregisterFunction( RPC_TRIGGEREVENT );
+
+	m_bRegistered = false;
 }

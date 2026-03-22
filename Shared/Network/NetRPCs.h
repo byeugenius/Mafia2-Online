@@ -27,6 +27,7 @@
 #define		RPC_PLAYERSTOPSYNCVEHICLE	"RPC_PlayerStopSyncVehicle"
 #define		RPC_PLAYERPING				"RPC_PlayerPing"
 #define		RPC_PLAYERDAMAGE			"RPC_PlayerDamage"
+#define		RPC_PLAYERSHOTHIT			"RPC_PlayerShotHit"
 
 // Vehicle RPC's
 #define		RPC_NEW_VEHICLE				"RPC_NewVehicle"

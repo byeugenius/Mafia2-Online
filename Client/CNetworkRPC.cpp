@@ -862,6 +862,8 @@ void CNetworkRPC::Register( RakNet::RPC4 * pRPC )
 
 	// Scripting
 	pRPC->RegisterFunction( RPC_TRIGGEREVENT, TriggerEvent );
+
+	m_bRegistered = true;
 }
 
 void CNetworkRPC::Unregister( RakNet::RPC4 * pRPC )
@@ -900,4 +902,6 @@ void CNetworkRPC::Unregister( RakNet::RPC4 * pRPC )
 
 	// Scripting
 	pRPC->UnregisterFunction( RPC_TRIGGEREVENT );
+
+	m_bRegistered = false;
 }

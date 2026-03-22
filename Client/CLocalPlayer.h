@@ -24,6 +24,24 @@ class CLocalPlayer : public CNetworkPlayer, public ExplicitSingleton<CLocalPlaye
 
 private:
 
+	struct sDamageContext
+	{
+		EntityId		m_attackerId;
+		DWORD			m_dwWeapon;
+		int				m_iWeaponBullet;
+		BYTE			m_byteDamageSource;
+		unsigned long	m_ulExpiresAt;
+
+		sDamageContext()
+			: m_attackerId(INVALID_ENTITY_ID)
+			, m_dwWeapon(0)
+			, m_iWeaponBullet(0)
+			, m_byteDamageSource(PLAYER_DAMAGE_SOURCE_UNKNOWN)
+			, m_ulExpiresAt(0)
+		{
+		}
+	};
+
 	bool							m_bFirstSpawn;
 	std::list< CNetworkVehicle* >	m_syncingVehicles;
 	bool							m_bFastExitVehicle;
@@ -38,8 +56,17 @@ private:
 	bool							m_bRenderHealthbar;
 
 	unsigned long					m_ulLastPingTime;
+	unsigned long					m_ulPendingDamageWindowEnd;
+	float							m_fLastReportedHealth;
+	CVector3						m_vecLastOnFootSyncPosition;
+	unsigned long					m_ulLastOnFootSyncTime;
+	sDamageContext					m_damageContext;
 
 	int								m_oldMoveState;
+
+	void							ClearDamageContext						( void );
+	void							ResetDamageTracking						( float fHealth );
+	void							ProcessDamageReporting					( void );
 
 public:
 
@@ -64,6 +91,9 @@ public:
 	void							OnReloadWeapon							( void );
 	void							OnEnterWater							( void );
 	bool							OnTakeDamage							( void );
+	void							ApplyServerHealth						( float fHealth );
+	void							RegisterDamageContext					( EntityId attackerId, DWORD dwWeapon, int iWeaponBullet, BYTE byteDamageSource );
+	void							ReportShotHit							( EntityId targetId );
 
 	void							HandlePassengerKey						( void );
 	void							GetClosestVehicle						( CNetworkVehicle ** pNetworkVehicle, EntityId * seatId );
