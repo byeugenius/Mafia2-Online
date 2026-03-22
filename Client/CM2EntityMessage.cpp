@@ -35,8 +35,49 @@ bool CM2EntityMessage::HandleEntityEvent( M2EntityMessage * pMessage )
 
 	CLocalPlayer * pLocalPlayer = CCore::Instance()->GetPlayerManager()->GetLocalPlayer();
 	CM2Ped * pLocalPed = pLocalPlayer->GetPlayerPed();
+	DWORD dwLocalGuid = pLocalPed->GetGUID();
 
-	if( pMessage->m_dwReceiveGUID == pLocalPed->GetGUID() )
+	if( pMessage->m_dwMessage == M2Enums::ON_SHOT_HIT_ENTITY )
+	{
+		bool bLocalShooter = (pMessage->m_dwSenderGUID == dwLocalGuid);
+		if( !bLocalShooter && pMessage->m_dwReceiveGUID == dwLocalGuid && pMessage->m_dwSenderGUID == 0 )
+			bLocalShooter = true;
+
+		if( bLocalShooter )
+		{
+			DWORD dwCandidateGuids[2] = { pMessage->m_dwReceiveGUID, pMessage->M2DamageMessage__dwEnemyGUID };
+			EntityId targetId = INVALID_ENTITY_ID;
+			DWORD dwTargetGuid = 0;
+
+			for( int i = 0; i < 2; ++i )
+			{
+				if( dwCandidateGuids[i] == 0 || dwCandidateGuids[i] == dwLocalGuid )
+					continue;
+
+				EntityId candidateId = CCore::Instance()->GetPlayerManager()->GetIdFromGameGUID( dwCandidateGuids[i] );
+				if( candidateId != INVALID_ENTITY_ID )
+				{
+					targetId = candidateId;
+					dwTargetGuid = dwCandidateGuids[i];
+					break;
+				}
+			}
+
+			CLogFile::Printf( "[damage-debug][client-shot-event] senderGuid=%u receiveGuid=%u enemyGuid=%u resolvedTargetGuid=%u target=%u",
+				pMessage->m_dwSenderGUID,
+				pMessage->m_dwReceiveGUID,
+				pMessage->M2DamageMessage__dwEnemyGUID,
+				dwTargetGuid,
+				targetId );
+
+			if( targetId != INVALID_ENTITY_ID )
+				pLocalPlayer->ReportShotHit( targetId );
+		}
+
+		return true;
+	}
+
+	if( pMessage->m_dwReceiveGUID == dwLocalGuid )
 	{
 		switch( pMessage->m_dwMessage )
 		{

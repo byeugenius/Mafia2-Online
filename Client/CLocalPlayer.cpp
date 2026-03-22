@@ -66,7 +66,9 @@ CLocalPlayer::CLocalPlayer( void ) : CNetworkPlayer( true )
 	m_ulLastFullSyncTime = 0;
 	m_ulLastPingTime = 0;
 	m_ulPendingDamageWindowEnd = 0;
-	m_fLastReportedHealth = 720.0f;
+	m_fLastReportedHealth = PLAYER_DEFAULT_HEALTH;
+	m_vecLastOnFootSyncPosition = CVector3();
+	m_ulLastOnFootSyncTime = 0;
 	m_oldMoveState = -1;
 	m_bRenderNametags = true;
 	m_bRenderHealthbar = true;
@@ -129,11 +131,14 @@ void CLocalPlayer::ProcessDamageReporting( void )
 		damageEvent.m_attackerId = INVALID_ENTITY_ID;
 		damageEvent.m_dwWeapon = 0;
 		damageEvent.m_iWeaponBullet = 0;
-		damageEvent.m_byteDamageSource = bHasPendingDamageWindow ? PLAYER_DAMAGE_SOURCE_GENERIC : PLAYER_DAMAGE_SOURCE_UNKNOWN;
+		if( bHasPendingDamageWindow )
+			damageEvent.m_byteDamageSource = (InternalIsInVehicle() ? PLAYER_DAMAGE_SOURCE_VEHICLE_IMPACT : PLAYER_DAMAGE_SOURCE_GENERIC);
+		else
+			damageEvent.m_byteDamageSource = PLAYER_DAMAGE_SOURCE_UNKNOWN;
 	}
 
 	RakNet::BitStream bitStream;
-	bitStream.Write( (char *)&damageEvent, sizeof(PlayerDamageEvent) );
+	SerializePlayerDamageEvent( &bitStream, damageEvent );
 	CCore::Instance()->GetNetworkModule()->Call( RPC_PLAYERDAMAGE, &bitStream, HIGH_PRIORITY, RELIABLE_ORDERED, true );
 
 	CLogFile::Printf( "[damage-debug][client-send] old=%.2f new=%.2f attacker=%u weapon=%u bullet=%d source=%d pendingWindow=%s",
@@ -328,6 +333,14 @@ void CLocalPlayer::SendOnFootSync( void )
 	// Get the player direction
 	m_pPlayerPed->GetDirection ( &onFootSync.m_vecDirection );
 
+	unsigned long ulCurrentTime = SharedUtility::GetTime();
+	if( m_ulLastOnFootSyncTime != 0 && ulCurrentTime > m_ulLastOnFootSyncTime )
+	{
+		float fDeltaSeconds = ((float)(ulCurrentTime - m_ulLastOnFootSyncTime) / 1000.0f);
+		if( fDeltaSeconds > 0.0f )
+			onFootSync.m_vecVelocity = ((onFootSync.m_vecPosition - m_vecLastOnFootSyncPosition) / fDeltaSeconds);
+	}
+
 	// Get the player health
 	onFootSync.m_fHealth = GetHealth ();
 
@@ -375,6 +388,9 @@ void CLocalPlayer::SendOnFootSync( void )
 
 	// Send the bitstream to the server
 	CCore::Instance()->GetNetworkModule()->Call(RPC_PLAYER_SYNC, &bitStream, IMMEDIATE_PRIORITY, UNRELIABLE_SEQUENCED, true);
+
+	m_vecLastOnFootSyncPosition = onFootSync.m_vecPosition;
+	m_ulLastOnFootSyncTime = ulCurrentTime;
 }
 
 void CLocalPlayer::SendInVehicleSync( void )
@@ -698,7 +714,7 @@ bool CLocalPlayer::OnTakeDamage ( void )
 	bool bAllowDamage = (CCore::Instance()->GetClientScriptingManager()->GetEvents()->Call( "onTakeDamage" ).GetInteger() == 1);
 
 	if( bAllowDamage )
-		m_ulPendingDamageWindowEnd = (SharedUtility::GetTime() + 500);
+		m_ulPendingDamageWindowEnd = (SharedUtility::GetTime() + PLAYER_DAMAGE_PENDING_WINDOW_MS);
 
 	return bAllowDamage;
 }
@@ -717,9 +733,45 @@ void CLocalPlayer::RegisterDamageContext( EntityId attackerId, DWORD dwWeapon, i
 	m_damageContext.m_dwWeapon = dwWeapon;
 	m_damageContext.m_iWeaponBullet = iWeaponBullet;
 	m_damageContext.m_byteDamageSource = byteDamageSource;
-	m_damageContext.m_ulExpiresAt = (SharedUtility::GetTime() + 500);
-	CLogFile::Printf( "[damage-debug][client-store-context] attacker=%u weapon=%u bullet=%d source=%d expiresInMs=500",
-		attackerId, dwWeapon, iWeaponBullet, (int)byteDamageSource );
+	m_damageContext.m_ulExpiresAt = (SharedUtility::GetTime() + PLAYER_DAMAGE_PENDING_WINDOW_MS);
+	CLogFile::Printf( "[damage-debug][client-store-context] attacker=%u weapon=%u bullet=%d source=%d expiresInMs=%lu",
+		attackerId, dwWeapon, iWeaponBullet, (int)byteDamageSource, PLAYER_DAMAGE_PENDING_WINDOW_MS );
+}
+
+void CLocalPlayer::ReportShotHit( EntityId targetId )
+{
+	if( !CCore::Instance()->GetNetworkModule()->IsConnected() || !IsSpawned() || IsDead() )
+		return;
+
+	if( targetId == INVALID_ENTITY_ID || targetId == GetId() )
+		return;
+
+	DWORD dwWeapon = GetSelectedWeapon();
+	if( dwWeapon <= 1 )
+		return;
+
+	PlayerHitEvent hitEvent;
+	hitEvent.m_targetId = targetId;
+	hitEvent.m_dwWeapon = dwWeapon;
+	hitEvent.m_iWeaponBullet = GetSelectedWeaponBullet();
+	GetPosition( &hitEvent.m_vecShooterPosition );
+	CCore::Instance()->GetCamera()->GetLookAt( &hitEvent.m_vecLookAt );
+	hitEvent.m_ulShotTime = SharedUtility::GetTime();
+
+	RakNet::BitStream bitStream;
+	SerializePlayerHitEvent( &bitStream, hitEvent );
+	CCore::Instance()->GetNetworkModule()->Call( RPC_PLAYERSHOTHIT, &bitStream, HIGH_PRIORITY, RELIABLE_ORDERED, true );
+
+	CLogFile::Printf( "[damage-debug][client-shot-hit] target=%u weapon=%u bullet=%d shooterPos=%.2f/%.2f/%.2f lookAt=%.2f/%.2f/%.2f",
+		targetId,
+		hitEvent.m_dwWeapon,
+		hitEvent.m_iWeaponBullet,
+		hitEvent.m_vecShooterPosition.fX,
+		hitEvent.m_vecShooterPosition.fY,
+		hitEvent.m_vecShooterPosition.fZ,
+		hitEvent.m_vecLookAt.fX,
+		hitEvent.m_vecLookAt.fY,
+		hitEvent.m_vecLookAt.fZ );
 }
 
 void CLocalPlayer::HandleSpawn( bool bRespawn )
@@ -778,6 +830,8 @@ void CLocalPlayer::HandleSpawn( bool bRespawn )
 	LockControls ( bOldCTRLState );
 
 	ResetDamageTracking( GetHealth() );
+	m_vecLastOnFootSyncPosition = CVector3();
+	m_ulLastOnFootSyncTime = 0;
 }
 
 void CLocalPlayer::OnDeath( CNetworkPlayer * pKiller )
@@ -834,6 +888,8 @@ void CLocalPlayer::OnDeath( CNetworkPlayer * pKiller )
 		LockControls ( true );
 
 		ResetDamageTracking( 0.0f );
+		m_vecLastOnFootSyncPosition = CVector3();
+		m_ulLastOnFootSyncTime = 0;
 	}
 }
 
@@ -1056,7 +1112,8 @@ bool CLocalPlayer::IsFullSyncNeeded ( void )
 	unsigned long ulCurrentTime = SharedUtility::GetTime();
 
 	// Has enough time passed since our last sync time?
-	if ( ulCurrentTime >= (m_ulLastFullSyncTime + NETWORK_TICKRATE) )
+	unsigned long ulTickRate = (InternalIsInVehicle() ? NETWORK_TICKRATE : NETWORK_ONFOOT_TICKRATE);
+	if ( ulCurrentTime >= (m_ulLastFullSyncTime + ulTickRate) )
 	{
 		// Update the last full sync time
 		m_ulLastFullSyncTime = ulCurrentTime;

@@ -112,14 +112,21 @@ void CRemotePlayer::StoreOnFootSync( const OnFootSync &onFootSync )
 	// Is the player in range of the localplayer?
 	if( (vecLocalPos - onFootSync.m_vecPosition).Length() < 200.0f )
 	{
+		CVector3 vecTargetPosition = onFootSync.m_vecPosition;
+		float fPredictionSeconds = ((float)NETWORK_ONFOOT_TICKRATE / 1000.0f);
+		vecTargetPosition += (onFootSync.m_vecVelocity * fPredictionSeconds);
+		if( IsPositionOutOfRange( vecTargetPosition ) )
+			vecTargetPosition = onFootSync.m_vecPosition;
+
 		// Set the move style
 		SetMoveStyle( onFootSync.m_bControlState );
+		SetRotation( onFootSync.m_vecRotation );
 
 		// Is there any movement being done?
-		if( (GetLastPosition() - onFootSync.m_vecPosition).Length() > 0.0001f )
+		if( (GetLastPosition() - vecTargetPosition).Length() > 0.0001f )
 		{
 			// Set the position
-			SetPosition ( onFootSync.m_vecPosition, onFootSync.m_bControlState, onFootSync.m_vecDirection );
+			SetPosition ( vecTargetPosition, onFootSync.m_bControlState, onFootSync.m_vecDirection );
 		}
 
 		// Set the player health
@@ -172,6 +179,7 @@ void CRemotePlayer::StoreOnFootSync( const OnFootSync &onFootSync )
 	{
 		// Teleport
 		Teleport( onFootSync.m_vecPosition );
+		SetRotation( onFootSync.m_vecRotation );
 
 		// Cleanup
 		TerminateSyncObjects();

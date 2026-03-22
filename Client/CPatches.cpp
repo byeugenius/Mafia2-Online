@@ -205,18 +205,7 @@ void __declspec(naked) C_Human__TakeDamage ( void )
 
 	if ( pVehicleCrashPlayer == pLocalPedddddd )
 	{
-		// Is not driver of vehicle don't process health changes
-		if (  ppLocalPlayer && ppLocalPlayer->IsInVehicle () && ppLocalPlayer->GetSeat () != 0 )
-		{
-			// TODO: Check that this is actually a vehicle impact causing the damage
-
-			_asm popad;
-			_asm sub     esp, 34h;
-			_asm push	 ebp;
-			_asm jmp	 C_Human__TakeDamage_End;
-		}
-		else
-			goto end;
+		goto end;
 	}
 	else
 		goto end;

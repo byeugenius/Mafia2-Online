@@ -58,6 +58,8 @@ private:
 	unsigned long					m_ulLastPingTime;
 	unsigned long					m_ulPendingDamageWindowEnd;
 	float							m_fLastReportedHealth;
+	CVector3						m_vecLastOnFootSyncPosition;
+	unsigned long					m_ulLastOnFootSyncTime;
 	sDamageContext					m_damageContext;
 
 	int								m_oldMoveState;
@@ -91,6 +93,7 @@ public:
 	bool							OnTakeDamage							( void );
 	void							ApplyServerHealth						( float fHealth );
 	void							RegisterDamageContext					( EntityId attackerId, DWORD dwWeapon, int iWeaponBullet, BYTE byteDamageSource );
+	void							ReportShotHit							( EntityId targetId );
 
 	void							HandlePassengerKey						( void );
 	void							GetClosestVehicle						( CNetworkVehicle ** pNetworkVehicle, EntityId * seatId );
