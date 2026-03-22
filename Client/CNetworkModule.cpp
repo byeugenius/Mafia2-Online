@@ -256,6 +256,13 @@ void CNetworkModule::UpdateNetwork( void )
 			// Process this packet with the server browser
 			CCore::Instance()->GetGUI()->GetServerBrowser()->ProcessNetworkPacket( (DefaultMessageIDTypes)pPacket->data[0] );
 		}
+		else if( pPacket->data[0] == ID_RPC_REMOTE_ERROR )
+		{
+			const char * szFunctionName = (pPacket->length > 2 ? (const char *)&pPacket->data[2] : "unknown");
+			CLogFile::Printf( "[network][rpc-remote-error] code=%u function=%s",
+				(pPacket->length > 1 ? (unsigned int)pPacket->data[1] : 0),
+				szFunctionName );
+		}
 
 		// Deallocate the memory used by the packet
 		m_pRakPeer->DeallocatePacket( pPacket );

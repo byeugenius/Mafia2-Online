@@ -44,8 +44,12 @@
 
 // Network
 #define		NETWORK_TIMEOUT			3000
-#define		NETWORK_VERSION			0x1b9
+#define		NETWORK_VERSION			0x1ba
 #define		NETWORK_TICKRATE		100
+#define		NETWORK_ONFOOT_TICKRATE	33
+
+const float PLAYER_DEFAULT_HEALTH = 720.0f;
+const unsigned long PLAYER_DAMAGE_PENDING_WINDOW_MS = 500;
 
 /** The default server listen port */
 const unsigned DEFAULT_PORT			= 27015;

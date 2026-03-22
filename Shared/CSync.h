@@ -24,6 +24,7 @@ struct OnFootSync
 	CVector3		m_vecPosition;
 	CVector3		m_vecRotation;
 	CVector3		m_vecDirection;
+	CVector3		m_vecVelocity;
 	float			m_fHealth;
 	DWORD			m_dwSelectedWeapon;
 	int				m_iSelectedWeaponBullet;
@@ -41,7 +42,8 @@ struct OnFootSync
 		: m_vecPosition()
 		, m_vecRotation()
 		, m_vecDirection()
-		, m_fHealth(720.0f)
+		, m_vecVelocity()
+		, m_fHealth(PLAYER_DEFAULT_HEALTH)
 		, m_dwSelectedWeapon(1)
 		, m_iSelectedWeaponBullet(0)
 		, m_bControlState(0)
@@ -61,6 +63,7 @@ struct OnFootSync
 		m_vecPosition = rhs.m_vecPosition;
 		m_vecRotation = rhs.m_vecRotation;
 		m_vecDirection = rhs.m_vecDirection;
+		m_vecVelocity = rhs.m_vecVelocity;
 		m_fHealth = rhs.m_fHealth;
 		m_dwSelectedWeapon = rhs.m_dwSelectedWeapon;
 		m_iSelectedWeaponBullet = rhs.m_iSelectedWeaponBullet;
@@ -120,7 +123,8 @@ enum ePlayerDamageSource
 {
 	PLAYER_DAMAGE_SOURCE_UNKNOWN = 0,
 	PLAYER_DAMAGE_SOURCE_FIREARM,
-	PLAYER_DAMAGE_SOURCE_GENERIC
+	PLAYER_DAMAGE_SOURCE_GENERIC,
+	PLAYER_DAMAGE_SOURCE_VEHICLE_IMPACT
 };
 
 struct PlayerDamageEvent
@@ -133,8 +137,8 @@ struct PlayerDamageEvent
 	BYTE			m_byteDamageSource;
 
 	PlayerDamageEvent()
-		: m_fOldHealth(720.0f)
-		, m_fNewHealth(720.0f)
+		: m_fOldHealth(PLAYER_DEFAULT_HEALTH)
+		, m_fNewHealth(PLAYER_DEFAULT_HEALTH)
 		, m_attackerId(INVALID_ENTITY_ID)
 		, m_dwWeapon(0)
 		, m_iWeaponBullet(0)
@@ -142,6 +146,82 @@ struct PlayerDamageEvent
 	{
 	}
 };
+
+struct PlayerHitEvent
+{
+	EntityId		m_targetId;
+	DWORD			m_dwWeapon;
+	int				m_iWeaponBullet;
+	CVector3		m_vecShooterPosition;
+	CVector3		m_vecLookAt;
+	unsigned long	m_ulShotTime;
+
+	PlayerHitEvent()
+		: m_targetId(INVALID_ENTITY_ID)
+		, m_dwWeapon(0)
+		, m_iWeaponBullet(0)
+		, m_vecShooterPosition()
+		, m_vecLookAt()
+		, m_ulShotTime(0)
+	{
+	}
+};
+
+static inline void SerializePlayerDamageEvent( RakNet::BitStream * pBitStream, const PlayerDamageEvent &damageEvent )
+{
+	pBitStream->Write( damageEvent.m_fOldHealth );
+	pBitStream->Write( damageEvent.m_fNewHealth );
+	pBitStream->Write( damageEvent.m_attackerId );
+	pBitStream->Write( damageEvent.m_dwWeapon );
+	pBitStream->Write( damageEvent.m_iWeaponBullet );
+	pBitStream->Write( damageEvent.m_byteDamageSource );
+}
+
+static inline bool DeserializePlayerDamageEvent( RakNet::BitStream * pBitStream, PlayerDamageEvent * pDamageEvent )
+{
+	if( !pBitStream || !pDamageEvent )
+		return false;
+
+	if( pBitStream->GetNumberOfUnreadBits() < ((sizeof(float) * 2) + sizeof(EntityId) + sizeof(DWORD) + sizeof(int) + sizeof(BYTE)) * 8 )
+		return false;
+
+	return pBitStream->Read( pDamageEvent->m_fOldHealth ) &&
+		pBitStream->Read( pDamageEvent->m_fNewHealth ) &&
+		pBitStream->Read( pDamageEvent->m_attackerId ) &&
+		pBitStream->Read( pDamageEvent->m_dwWeapon ) &&
+		pBitStream->Read( pDamageEvent->m_iWeaponBullet ) &&
+		pBitStream->Read( pDamageEvent->m_byteDamageSource );
+}
+
+static inline void SerializePlayerHitEvent( RakNet::BitStream * pBitStream, const PlayerHitEvent &hitEvent )
+{
+	pBitStream->Write( hitEvent.m_targetId );
+	pBitStream->Write( hitEvent.m_dwWeapon );
+	pBitStream->Write( hitEvent.m_iWeaponBullet );
+	hitEvent.m_vecShooterPosition.Serialize( pBitStream );
+	hitEvent.m_vecLookAt.Serialize( pBitStream );
+	pBitStream->Write( hitEvent.m_ulShotTime );
+}
+
+static inline bool DeserializePlayerHitEvent( RakNet::BitStream * pBitStream, PlayerHitEvent * pHitEvent )
+{
+	if( !pBitStream || !pHitEvent )
+		return false;
+
+	if( pBitStream->GetNumberOfUnreadBits() < (sizeof(EntityId) + sizeof(DWORD) + sizeof(int) + (sizeof(float) * 6) + sizeof(unsigned long)) * 8 )
+		return false;
+
+	if( !pBitStream->Read( pHitEvent->m_targetId ) ||
+		!pBitStream->Read( pHitEvent->m_dwWeapon ) ||
+		!pBitStream->Read( pHitEvent->m_iWeaponBullet ) )
+	{
+		return false;
+	}
+
+	pHitEvent->m_vecShooterPosition.Deserialize( pBitStream );
+	pHitEvent->m_vecLookAt.Deserialize( pBitStream );
+	return pBitStream->Read( pHitEvent->m_ulShotTime );
+}
 
 struct UnoccupiedVehicleSync
 {
